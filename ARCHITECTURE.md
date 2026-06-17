@@ -1,113 +1,190 @@
-# Aweb Agent for World — Architecture
+# Architecture — Aweb Agent for World
 
-**Web3 department of Aweb. Self-contained. Does not touch the core Aweb build.**
-Prepared 2026-06-17. Companion to `docs/grants/WORLD_AWEB_SOTA_APP_THESIS_2026-06-17.md`.
+The technical companion to the [README](./README.md). The README is the *why* and the pitch; this is the *how* — modules, the lifecycle state machine, the proof model, and the optional Aweb backend integration.
+
+> **Thesis:** World proves a *human* is behind the agent. Aweb proves the agent *behaved*. Identity says **who**; this layer records and proves **what the agent did** — and what it was blocked from doing.
 
 ---
 
 ## 0. Isolation contract (read first)
 
-- Lives entirely under `web3/world-agent/`. The pnpm workspace only globs `packages/*`, `apps/*`, `services/*`, so **this app is invisible to the main Aweb build** — its own `package.json`, its own `node_modules`, its own deploy. We never import from or edit `apps/web` or `packages/*`. Governance/receipt logic is **re-implemented clean** here (concepts proven in `packages/solana-agent-kit`), so there is zero coupling.
+This app lives entirely under `web3/world-agent/`. The parent Aweb pnpm workspace only globs `packages/*`, `apps/*`, `services/*`, so **this app is invisible to the core Aweb build** — its own `package.json`, its own `node_modules` (npm, not pnpm), its own Vercel project. It never imports from or edits Aweb internals. The optional Aweb backend (the `compute` tool) is reached **only over HTTP, configured by env**, and degrades to a clean skip when absent. Trust never depends on it.
 
 ---
 
-## 1. The thesis, in one diagram
+## 1. Containers
 
-```
-        WORLD                                AWEB
-  ┌───────────────────┐            ┌──────────────────────────────┐
-  │ World ID / AgentKit│  identity  │  Trust Runtime                │
-  │ "a unique human    │ ─────────► │  plan → simulate → APPROVE    │
-  │  is behind this     │           │  → execute → RECEIPT          │
-  │  agent"             │ ◄───────── │  "and here is exactly what    │
-  │ World Wallet / x402 │  approval  │   the agent did, provably"    │
-  └───────────────────┘  +payments  └──────────────────────────────┘
-        the WHO                              the WHAT + the PROOF
+```mermaid
+flowchart TB
+    subgraph Client["Browser / World App (MiniKit)"]
+        UI["Mini App UI<br/>AgentApp · MissionConsole<br/>liquid-glass, mobile-first"]
+        VER["Receipt verifier<br/>(Web Crypto, client-side)"]
+    end
+
+    subgraph Server["Next.js 15 server (App Router) · :3210"]
+        API["API routes<br/>/api/mission/{plan,run,execute,settle}<br/>/api/nonce · /api/complete-siwe"]
+        BRAIN["Agent brain<br/>planner (Claude) · tools"]
+        TRUST["Trust Runtime<br/>policy · lifecycle · receipts · sealing"]
+        STORE["Store<br/>file (dev) / Upstash KV (prod)"]
+    end
+
+    subgraph External["External"]
+        WID["World ID / MiniKit<br/>verifyCloudProof (v4 managed RP)"]
+        WAL["World Wallet<br/>MiniKit Pay + tx verify"]
+        LLM["Claude · Perplexity"]
+        AWEB["Aweb backend (optional)<br/>governed E2B sandbox"]
+    end
+
+    UI <--> API
+    API --> BRAIN --> TRUST --> STORE
+    UI <--> WID
+    UI <--> WAL
+    BRAIN --> LLM
+    BRAIN -.->|compute tool, HTTP + token| AWEB
+    API --> VER
+
+    classDef c fill:#0E1A14,color:#E8FFF4,stroke:#1A7F5A;
+    classDef e fill:#0E1116,color:#D7E2FF,stroke:#3A4A6B;
+    class Client,Server,UI,VER,API,BRAIN,TRUST,STORE c;
+    class External,WID,WAL,LLM,AWEB e;
 ```
 
-World gives the agent an identity. **Aweb is the governance + evidence layer World's AgentKit explicitly does not provide** (no governance, no real-time approval, no receipts, no accountability, no non-repudiation). This app is that layer, shipped as a World Mini App.
+| Layer | Path | Role |
+|---|---|---|
+| Mini App shell | `src/app/`, `src/components/` | Next.js 15 + React 19 + `@worldcoin/minikit-js`. `MiniKit.isInstalled()` env detection; dev/mock mode outside World App. Liquid-glass UI; live streaming `MissionConsole`. |
+| Login | `src/lib/world/` | **walletAuth (SIWE)** — `/api/nonce` → `MiniKit.walletAuth` → verify. Wallet + World username = the account (not World ID, per guidelines). |
+| Proof of human + approval | `src/lib/world/verify.ts` | **World ID** via `verifyCloudProof` (World ID 4.0 managed RP). Plan-hash-bound approval for sensitive steps; one-human-one-agent via `verify-human`. |
+| Trust Runtime | `src/lib/trust/` | Policy engine, lifecycle state machine, plan freeze + hashing, hash-chained + Ed25519-sealed receipts, anti-replay nullifier registry, in-browser verifier. |
+| Agent brain | `src/lib/agent/` | Claude planner (NL → typed plan, zod-validated) + safe tools + the Aweb sandbox client. |
+| Tools | `src/lib/tools/` | `research · draft · compute · send · pay` — each with an authoritative risk class. |
+| Store | `src/lib/store/` | File-backed in dev; **Upstash KV** in prod (auto-switch via `WA_KV_*`), namespaced `wa:`. Missions, receipts, used-nullifier registry. |
 
 ---
 
 ## 2. The killer primitive — World-ID-bound approval
 
-The single most important design decision:
+> A sensitive step cannot execute until a unique verified human produces a World ID proof whose `signal` is the SHA-256 hash of the exact, frozen mission plan.
 
-> **A sensitive agent step cannot execute until a verified unique human produces a World ID proof whose `signal` is the SHA-256 hash of the exact mission plan.**
-
-- `action`: `approve-mission` (per-app World ID action)
-- `signal`: `planHash` = SHA-256 of the canonical, frozen mission plan
+- `action`: `approve-mission` · `signal`: `planHash` (SHA-256 of the canonical frozen plan)
 - result: `nullifier_hash` (this unique human), `proof`, `merkle_root`, `verification_level` (orb/device)
+- **Plan binding:** change the plan by one byte → approval is void (`signalHash !== approvalSignal()`).
+- **Anti-replay:** the `(nullifier_hash, signal)` pair is recorded; an approval is single-use.
+- **Sybil resistance:** the `verify-human` nullifier is the human's stable pseudonymous id → at most one agent per verified human.
 
-This yields a **non-repudiable, zero-knowledge proof that one unique human approved precisely this plan** — exactly the accountability AgentKit lacks, expressed in World's own primitive. The proof is embedded in the receipt. If the plan changes by one byte, the approval is void (hash mismatch). Single-use: the `nullifier_hash` for that `signal` is recorded and cannot be replayed.
-
-One-human-one-agent: onboarding uses a `verify-human` action; the returned `nullifier_hash` is the human's stable pseudonymous id → at most one agent per verified human (sybil-resistant, no bot armies).
+Server verification uses the MiniKit SDK's `verifyCloudProof` (targets the correct v4 managed-RP endpoint). In dev/mock mode (no real App ID, or `WORLD_AGENT_DEV_MODE=true`) the proof is deterministically simulated so the full loop is testable in any browser.
 
 ---
 
-## 3. Components
+## 3. The governed mission lifecycle
 
-| Layer | Tech | Role |
+```mermaid
+stateDiagram-v2
+    [*] --> planned: plan frozen + hashed
+    planned --> simulated: dry-run every step (no side effects)
+    simulated --> awaiting_approval: has SENSITIVE / VALUE_MOVEMENT step
+    simulated --> approved: only READ_ONLY / REVERSIBLE (auto, logged)
+    awaiting_approval --> approved: World ID proof, signal = planHash ✓
+    awaiting_approval --> rejected: human declines
+    approved --> executing: allowlist + value cap enforced
+    executing --> completed: all steps ok
+    executing --> failed: a step failed / blocked
+    completed --> [*]: receipt sealed (Ed25519)
+    failed --> [*]: receipt sealed (Ed25519)
+    rejected --> [*]: receipt sealed (Ed25519)
+
+    note right of planned
+        plan denied at construction
+        if any step is default-denied
+    end note
+    note right of completed
+        VALUE_MOVEMENT may then
+        settle on-chain → append
+        "settle" entry → re-seal
+    end note
+```
+
+Every transition appends a hash-chained receipt entry. The core is **deterministic** — no `Date`/random inside the runtime; callers inject `now()` — which is what makes the receipts reproducible and the tests exact.
+
+**Risk classes** (`src/lib/trust/policy.ts`, default-deny):
+
+| Class | Decision | Used by |
 |---|---|---|
-| Mini App shell | **Next.js 15 (App Router) + React + TS**, `@worldcoin/minikit-js` (MiniKit 2.0), `MiniKitProvider` | Runs inside World App; `MiniKit.isInstalled()` env detection; dev/mock mode outside World App |
-| Login | **walletAuth (SIWE)** — `/api/nonce` → `MiniKit.walletAuth` → `verifySiweMessage` | Wallet address + World username = the account (NOT World ID — per guidelines) |
-| Proof of human + approval | **World ID via IDKit** (unified) — verify server-side at `developer.worldcoin.org/api/v2/verify/{app_id}` | One-human-one-agent onboarding; plan-hash-bound approval for sensitive steps |
-| Trust Runtime | clean TS (`lib/trust/`) | Policy engine (risk classes, allowlists, value caps), lifecycle state machine, plan freeze + hashing |
-| Agent brain | **Claude** (Anthropic) via clean client (`lib/agent/`) | NL task → typed mission plan → simulate → execute safe tools; structured output enforced |
-| Tools (MVP, safe) | `lib/tools/` | research/summarize, draft, compare, monitor-alert (no-payment first); x402/Wallet pay path designed but gated off |
-| Receipts | `lib/receipt/` + `/receipt/[id]` page + verifier | SHA-256 **hash-chained**, redaction-by-design, embeds the World ID approval proof; shareable + independently verifiable |
-| Store | SQLite (dev) / Postgres (prod) via a thin repo | Missions, receipts, used-nullifier registry |
-| UI | liquid-glass design system (`app/`, `styles/`) | Aweb-organism top-2026 liquid glass, mobile-first, 2–3s load, World UI-Kit aligned, localized |
+| `READ_ONLY` | auto (logged) | `research` |
+| `REVERSIBLE` | auto (logged) | `draft`, `compute` |
+| `SENSITIVE` | needs World ID approval | `send` |
+| `VALUE_MOVEMENT` | needs World ID approval **+ value cap + allowlist** | `pay` |
+
+The risk class is **derived from the tool, not the model** — governance is never something the planner can talk its way around.
 
 ---
 
-## 4. The governed mission lifecycle (the product)
+## 4. Proof model — receipts you verify yourself
 
-```
-1. ONBOARD     walletAuth (SIWE) → account.  Optional World ID verify-human → bind the one agent.
-2. ASK         human gives the agent a task in natural language.
-3. PLAN        Claude returns a TYPED mission plan: ordered steps, tool per step, risk class,
-               data boundaries, value cap. Plan is FROZEN and hashed (planHash).
-4. SIMULATE    agent dry-runs every step; shows expected effects + which steps are SENSITIVE.
-               No external side effects, no signature yet (simulate-by-default).
-5. APPROVE     for sensitive/irreversible/pay steps → World ID proof with signal = planHash.
-               Lifecycle blocks signing/execution until APPROVED. Nullifier recorded (anti-replay).
-6. EXECUTE     agent runs the approved plan via governed tools; value capped; allowlist enforced.
-7. RECEIPT     hash-chained receipt: authority (wallet + World ID nullifier + verification_level),
-               each step's tool/outcome/cost/redaction, what stayed BLOCKED, and the approval proof.
-               Shareable, independently verifiable.
+```mermaid
+flowchart LR
+    subgraph Chain["Hash chain (src/lib/trust/receipt.ts)"]
+        E0["entry₀<br/>prevHash = null"] --> E1["entry₁<br/>prevHash = h₀"] --> E2["entry₂ …<br/>prevHash = h₁"]
+    end
+    REDACT["redaction-by-design<br/>proof/secret/token → [redacted]<br/>(before hashing)"] --> Chain
+    Chain --> SEAL["Ed25519 seal over chain head<br/>(src/lib/trust/signing.ts)"]
+    SEAL --> WEB{{"In-browser verify (verify-web.ts)"}}
+    WEB --> I["✅ Integrity (hash chain intact)"]
+    WEB --> A["✅ Authenticity (sealed by issuer key)"]
+
+    classDef ok fill:#0E1A14,color:#E8FFF4,stroke:#1A7F5A;
+    class Chain,E0,E1,E2,REDACT,SEAL,WEB,I,A ok;
 ```
 
-Risk classes: `READ_ONLY` (auto), `REVERSIBLE` (auto, logged), `SENSITIVE` (needs World ID approval), `VALUE_MOVEMENT` (needs World ID approval + value cap + allowlist). Default-deny anything unclassified.
+- **Integrity:** `entryₙ.hash = SHA-256(canonical{seq,kind,at,summary,data,prevHash})`; altering any past entry breaks linkage.
+- **Authenticity:** Ed25519 signature over the chain head; key from `TRUST_SIGNING_PRIVATE_KEY` (PKCS8 base64) in prod, a stable dev key otherwise. The public key travels with the receipt → verifiable offline.
+- **Redaction:** the redactor strips `proof`, secrets, and tokens before hashing — the chain proves what happened without leaking it.
+- Verification runs **client-side** (Web Crypto) on `/receipt/[id]` — no trust in the server.
 
 ---
 
-## 5. MVP scope (first vertical slice — ship-able, compliant, not a toy)
+## 5. Real, provable work — the `compute` tool + Aweb backend
 
-A genuinely useful **governed personal agent** with the full loop working end-to-end on a sharp first capability set:
-- **Research & brief** — agent researches a real question and returns a sourced brief (READ_ONLY).
-- **Draft & prepare** — drafts a message/document for the human (REVERSIBLE).
-- **Send / commit** — the irreversible step → **World ID approval** required → produces the receipt (SENSITIVE).
-- **(Designed, gated)** pay/transact via World Wallet + x402 (VALUE_MOVEMENT) — wired but off for MVP until payments are reviewed.
+The agent doesn't just govern intent; it does real computation, provably. The `compute` tool runs code in **Aweb's governed E2B sandbox** (no-network, secret-forbid, autoKill, budget-capped) and **nests the returned sandbox proof into our own receipt** → a triple-attested artifact.
 
-Every run ends with a shareable, verifiable receipt. This proves the thesis with real work, stays inside Mini App guidelines (no trading/yield/tokens/chance), and is the seed of the billion-scale "every verified human has a safe agent" product.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Trust as Trust Runtime
+    participant Tool as compute tool
+    participant Aweb as Aweb sandbox (HTTP)
+    participant Chain as Our receipt chain
 
-Compliance: World ID for identity, mobile-first 2–3s UX, UI Kit alignment, localization (EN/ES/TH/JA/KO/PT), no "official World" branding.
+    Trust->>Tool: execute(code, language)
+    Tool->>Tool: buildComputeRequest → {files, command}
+    alt AWEB_SANDBOX_URL + token configured
+        Tool->>Aweb: POST governed sandbox run
+        Aweb-->>Tool: {exit, stdout, stderr,<br/>sandbox_receipt, agent_receipt}
+        Tool-->>Trust: ok + output incl. nested Aweb receipts
+    else not configured / unreachable
+        Tool-->>Trust: clean skip (never breaks the mission)
+    end
+    Trust->>Chain: append execute_step<br/>(nested Aweb proof flows into our hash chain)
+```
+
+Triple attestation: **verified human (World ID) → governed sandbox (Aweb E2B receipt, nested) → sealed chain (this app).** Because the tool degrades to a clean skip when the backend is absent, the open app always runs; the Aweb token is a pluggable superpower. See `src/lib/agent/aweb-sandbox.ts`.
+
+> Note: Aweb's current `/api/aweb-code/preflight` is session-authenticated; a first-party API-key sandbox endpoint is the intended `AWEB_SANDBOX_URL` target for headless use.
 
 ---
 
-## 6. Build order
+## 6. World Wallet / x402 pay path
 
-1. Scaffold isolated Next.js app (no workspace coupling) — installs/builds standalone. ✅ gate
-2. Trust Runtime core + tests (governance, lifecycle, plan-hash, hash-chained receipts, nullifier registry).
-3. World ID + MiniKit wiring (walletAuth, IDKit verify, plan-hash-bound approval) + dev/mock mode.
-4. Agent brain + safe governed tools (Claude planner, simulate, execute).
-5. SOTA liquid-glass UI/UX across the 7 lifecycle screens.
-6. Local end-to-end run + receipt verification.
-7. Developer Portal app + grant materials; apply to Spark + continuous + any open program (gated on Daniel).
+`pay` (`VALUE_MOVEMENT`) **authorizes only** — funds never move server-side. After World ID approval, settlement happens client-side via **MiniKit Pay**; `/api/mission/settle` then verifies the on-chain tx (`verifyWorldTransaction`), appends a hash-chained `settle` entry, and **re-seals** the chain. Value is capped per-step and cumulatively; the planner reconciles `valueUsd` ↔ `args.amountUsd` so the cap and the tool agree on one authoritative figure.
 
 ---
 
-## 7. Open inputs from Daniel (non-blocking for the build; needed before submit)
+## 7. Deployment
 
-World Developer Portal account + **App ID** (`app_...`) and an Action id for `approve-mission`/`verify-human`; jurisdiction confirm (grants exclude US persons); individual vs Aweb Labs; WLD vs USDC; approve app name + public description. Until these exist, the app runs in **dev/mock mode** so the full flow is buildable and testable now.
+- Live: **https://agent.aweblabs.ai** — isolated Vercel project (not the Aweb project).
+- Persistence: **Upstash KV** in prod (`WA_KV_REST_URL` / `WA_KV_REST_TOKEN`), file-backed in dev.
+- World ID 4.0: managed RP + production App ID; flip `WORLD_AGENT_DEV_MODE=false` for live proofs.
+- Env reference: [`.env.local.example`](./.env.local.example). No secrets in the repo.
+
+## 8. Tests
+
+`npm test` (Node test runner via `tsx`) — **19 invariant tests** across governance (policy/lifecycle/anti-replay/chain integrity), Ed25519 sealing, and the sandbox compute tool (request mapping, HTTP client, graceful degrade, and an end-to-end mission that nests the Aweb proof and re-verifies the chain). `npm run typecheck` is strict and clean.
