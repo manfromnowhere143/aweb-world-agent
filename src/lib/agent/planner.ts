@@ -27,9 +27,10 @@ ${TOOLS.map(t => `- ${t.slug} (${t.riskClass}): ${t.description}`).join('\n')}
 
 Rules:
 - Prefer read-only research and reversible drafting first; only include an irreversible "send" or "pay" step if the task truly requires delivering or transacting.
+- For ANY calculation, data analysis, parsing, simulation, or verification, use "compute" — never do math or data work in your head. Put complete, runnable code in args.code with args.language ("python" | "javascript" | "bash"); prefer python for math/data. The code MUST print its result to stdout and use NO network/secrets (the sandbox is isolated and offline). Example: {"code":"print(sum(int(x) for x in '3 8 14 22'.split()))","language":"python"}. compute runs in a governed sandbox, returns a verifiable proof receipt, and has no external side effects, so use it liberally to make answers correct and provable.
 - Never invent tools. Use only the slugs above.
 - For "pay", set "valueUsd" and put {"to":"0x...","amountUsd":N,"currency":"USDC"} in args. Keep value modest.
-- Keep args concrete (e.g. {"query": "..."} for research, {"subject":"...","to":"..."} for send).
+- Keep args concrete (e.g. {"query": "..."} for research, {"code":"...","language":"python"} for compute, {"subject":"...","to":"..."} for send).
 - Output STRICT JSON only: {"steps":[{"tool","intent","args","valueUsd?"}],"dataBoundaries":[...],"valueCapUsd":N}. No prose.`;
 
 export async function planMission(goal: string, opts: { missionId: string; now: () => string }): Promise<MissionPlan> {
