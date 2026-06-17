@@ -1,0 +1,22 @@
+node_modules/
+.next/
+out/
+build/
+
+# Secrets — never commit. Configuration is by environment variable.
+.env
+.env.local
+.env*.local
+*.pem
+*.key
+*.p8
+data/*.json
+data/signing-key.json
+!data/.gitkeep
+
+# Tooling / OS
+*.tsbuildinfo
+next-env.d.ts
+coverage/
+.DS_Store
+.vercel

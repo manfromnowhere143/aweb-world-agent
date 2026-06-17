@@ -1,0 +1,46 @@
+name: Bug report
+description: Something isn't working as documented
+labels: [bug]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Trust Runtime (policy / lifecycle / receipts)
+        - World ID / wallet
+        - Agent / tools
+        - UI / receipt page
+        - Build / CI / setup
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: Environment
+      placeholder: "node version, OS, dev vs World App, commit SHA"
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Confirm
+      options:
+        - label: This report contains no secrets, private keys, or production data
+          required: true
