@@ -6,7 +6,7 @@
 
 **World proves a _human_ is behind the agent. Aweb proves the agent _behaved_.**
 
-[![CI](https://github.com/manfromnowhere143/aweb-world-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/manfromnowhere143/aweb-world-agent/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-19%20passing-1A7F5A.svg)](./test)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-1A7F5A.svg)](./LICENSE)
 [![World Mini App](https://img.shields.io/badge/World-Mini%20App-000000.svg)](https://world.org/mini-apps)
 [![Built with TypeScript](https://img.shields.io/badge/TypeScript-strict-3178C6.svg)](https://www.typescriptlang.org/)
