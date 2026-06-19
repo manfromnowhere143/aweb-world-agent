@@ -2,10 +2,12 @@ import { NextRequest } from 'next/server';
 import { GovernedMission, GovernanceError } from '@/lib/trust/runtime';
 import { policyFromPlan } from '@/lib/agent/policy-from-plan';
 import { simulateTool, runTool } from '@/lib/tools';
-import { getMission, saveMission, FileNullifierRegistry } from '@/lib/store';
+import { getMission, saveMission, saveMemory, FileNullifierRegistry } from '@/lib/store';
 import { verifyWorldApproval, type WorldProofPayload } from '@/lib/world/verify';
 import { worldConfig } from '@/lib/world/config';
 import { sealReceipt } from '@/lib/trust/signing';
+import { anchorSealedReceipt } from '@/lib/chain/anchor';
+import { verifyAndRepair, settleGovernedPayments, memorySummary } from '@/lib/agent/run-mission';
 
 export const runtime = 'nodejs';
 const now = () => new Date().toISOString();
@@ -66,10 +68,34 @@ export async function POST(req: NextRequest) {
         });
 
         const receipt = mission.getReceipt();
+
+        // Verify (ensemble) → self-repair → re-verify, streamed live. The verdict +
+        // any corrective steps are recorded before sealing, so they're sealed + anchored.
+        // Governed treasury settlement (real on-chain, only on real approval).
+        await settleGovernedPayments(receipt, now, (type, data) => send({ type, ...(data || {}) }));
+
+        send({ type: 'verifying' });
+        const verdict = await verifyAndRepair(receipt, stored.plan, now, (type, data) => send({ type, ...(data || {}) }));
+
         send({ type: 'sealing' });
         await sleep(220);
         receipt.seal = (await sealReceipt(receipt, now)) ?? undefined;
         await saveMission({ ...stored, receipt, state: mission.state });
+
+        // Anchor the sealed root on World Chain — a permanent, public proof. Best-effort:
+        // skips cleanly if the signer is unset/unfunded, never blocking the sealed receipt.
+        send({ type: 'anchoring' });
+        const anchor = await anchorSealedReceipt(receipt.seal, now);
+        if (anchor) {
+          receipt.anchor = anchor;
+          await saveMission({ ...stored, receipt, state: mission.state });
+          send({ type: 'anchored', anchor });
+        }
+
+        // Per-human memory: remember this mission for the verified human (best-effort).
+        const subject = walletAddress || receipt.authority.worldIdNullifier;
+        if (subject) await saveMemory(subject, stored.missionId, memorySummary(stored.plan.goal, verdict), now()).catch(() => {});
+
         send({ type: 'done', state: mission.state, planHash: mission.planHash, receipt });
       } catch (e) {
         send({ type: 'error', error: e instanceof Error ? e.message : String(e) });

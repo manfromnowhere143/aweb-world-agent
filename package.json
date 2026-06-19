@@ -12,11 +12,17 @@
     "test": "node --import tsx --test test/*.test.ts"
   },
   "dependencies": {
+    "@across-protocol/app-sdk": "^0.6.1",
     "@anthropic-ai/sdk": "^0.39.0",
+    "@e2b/code-interpreter": "^1.5.1",
+    "@neondatabase/serverless": "^0.10.4",
+    "@worldcoin/idkit": "^4.1.8",
+    "@worldcoin/idkit-core": "^4.1.8",
     "@worldcoin/minikit-js": "^1.9.6",
     "next": "^15.1.6",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "viem": "^2.21.55",
     "zod": "^3.24.1"
   },
   "devDependencies": {

@@ -37,6 +37,8 @@ export interface MissionPlan {
   steps: MissionStep[];
   dataBoundaries: string[]; // what data the agent may touch
   valueCapUsd: number; // hard ceiling across the whole mission
+  reasoning?: string; // the agent's deliberation — how it decomposed the goal (auditable)
+  critique?: string; // the agent's self-critique of its own plan before committing
 }
 
 /** Governance configuration for a mission. */
@@ -87,7 +89,10 @@ export type ReceiptKind =
   | 'blocked'
   | 'complete'
   | 'reject'
-  | 'settle'; // on-chain settlement of an authorized value movement
+  | 'settle' // on-chain settlement of an authorized value movement
+  | 'verify' // post-execution self-verification: did the agent actually meet the goal
+  | 'replan' // self-repair: corrective steps generated from real execution feedback
+  | 'anchor'; // receipt root anchored on World Chain (permanent public proof)
 
 /** One hash-chained receipt entry. */
 export interface ReceiptEntry {
@@ -109,6 +114,16 @@ export interface ReceiptSeal {
   signedAt: string;
 }
 
+/** A permanent on-chain anchor of the sealed receipt root (World Chain). */
+export interface ReceiptAnchor {
+  chain: 'world-chain';
+  chainId: number;
+  txHash: string;
+  explorer: string;
+  rootHash: string; // the sealed chain-head hash committed on-chain
+  anchoredAt: string;
+}
+
 /** The full verifiable receipt for a mission. */
 export interface ReceiptChain {
   missionId: string;
@@ -116,6 +131,7 @@ export interface ReceiptChain {
   authority: MissionAuthority;
   entries: ReceiptEntry[];
   seal?: ReceiptSeal;
+  anchor?: ReceiptAnchor;
 }
 
 /** Result of running one step (returned by the injected execute fn). */

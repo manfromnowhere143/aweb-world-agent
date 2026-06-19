@@ -57,6 +57,9 @@ export class GovernedMission {
       steps: this.plan.steps.map(s => ({ id: s.id, tool: s.tool, risk: s.riskClass, intent: s.intent, valueUsd: s.valueUsd })),
       evaluation: this.evaluation.evaluations,
       valueCapUsd: this.policy.valueCapUsd,
+      // The agent's recorded deliberation — auditable reasoning, not just the result.
+      ...(this.plan.reasoning ? { reasoning: this.plan.reasoning } : {}),
+      ...(this.plan.critique ? { critique: this.plan.critique } : {}),
     });
     if (this.evaluation.denied.length) {
       this.state = 'failed';

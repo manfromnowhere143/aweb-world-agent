@@ -77,16 +77,19 @@ export async function requestPayment(p: { to: string; amountUsd: number; currenc
  * dev-mode then accepts it).
  */
 export async function requestApproval(action: string, signal: string): Promise<WorldProofPayload> {
+  // Outside World App → marked preview sentinel (server treats it as non-real).
   if (!inWorldApp()) {
     return { proof: 'dev-proof', merkle_root: 'dev-merkle', nullifier_hash: 'dev-human', verification_level: 'orb' };
   }
+  // World ID verify via MiniKit — opens the World App drawer + returns the proof.
+  // `signal` is the mission plan-hash (binds approval to the exact plan).
   const res = await MiniKit.commandsAsync.verify({
     action,
     signal,
     verification_level: 'orb' as never,
   });
   const p = (res as { finalPayload: Record<string, unknown> }).finalPayload;
-  if (p.status === 'error') throw new Error(String(p.error_code ?? 'verification cancelled'));
+  if (p.status === 'error') throw new Error(String(p.error_code ?? p.detail ?? 'verification cancelled'));
   return {
     proof: String(p.proof),
     merkle_root: String(p.merkle_root),

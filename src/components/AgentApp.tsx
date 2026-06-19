@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { login, requestApproval, inWorldApp, type Account } from '@/lib/world/client';
 import type { MissionPlan, StepEvaluation } from '@/lib/trust/types';
 import type { WorldProofPayload } from '@/lib/world/verify';
@@ -46,7 +46,7 @@ export function AgentApp() {
   async function createPlan() {
     setBusy(true); setError(''); setStage('planning');
     try {
-      const r = await fetch('/api/mission/plan', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ goal }) });
+      const r = await fetch('/api/mission/plan', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ goal, walletAddress: account?.address }) });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error || 'planning failed');
       setPlan(d.plan); setPlanHash(d.planHash); setSignal(d.signal); setEvaluation(d.evaluation);
@@ -104,6 +104,8 @@ export function AgentApp() {
           <div className="dock"><div className="inner">
             <button className="btn btn-world" disabled={busy} onClick={activate}>{busy ? <span className="spin" /> : 'Activate my agent'}</button>
           </div></div>
+          <div className="gap" />
+          <div className="center faint" style={{ fontSize: 12 }}><a href="/developers">Building on Aweb? Developer platform →</a></div>
         </div>
       )}
 
@@ -130,7 +132,7 @@ export function AgentApp() {
         </div>
       )}
 
-      {stage === 'planning' && <Center title="Planning your mission…" sub="Decomposing your task into typed, governed steps." />}
+      {stage === 'planning' && <Thinking />}
 
       {stage === 'plan' && plan && (
         <div className="fade-in">
@@ -138,6 +140,15 @@ export function AgentApp() {
           <div className="gap-lg" />
           <h1 className="title" style={{ fontSize: 24 }}>Mission plan</h1>
           <p className="lede" style={{ fontSize: 15 }}>{plan.goal}</p>
+          {(plan.reasoning || plan.critique) && (
+            <>
+              <div className="gap" />
+              <div className="glass tight pad reason-panel">
+                {plan.reasoning && <><div className="reason-label">How the agent reasoned</div><p className="reason-text">{plan.reasoning}</p></>}
+                {plan.critique && <><div className="reason-label" style={{ marginTop: 14 }}>Self-critique</div><p className="reason-text">{plan.critique}</p></>}
+              </div>
+            </>
+          )}
           <div className="gap" />
           <div className="glass pad">
             {plan.steps.map((s, i) => {
@@ -163,7 +174,7 @@ export function AgentApp() {
           </div>
           {error && <Err msg={error} />}
           <div className="dock"><div className="inner" style={{ display: 'flex', gap: 10 }}>
-            <button className="btn btn-ghost" style={{ width: 'auto', padding: '17px 18px' }} onClick={reset}>Back</button>
+            <button className="btn btn-ghost btn-sm" onClick={reset}>Back</button>
             <button className="btn btn-primary" disabled={busy} onClick={startMission}>{needsApproval ? 'Review & approve' : 'Run mission'}</button>
           </div></div>
         </div>
@@ -181,7 +192,7 @@ export function AgentApp() {
           <div className="glass tight pad"><div className="row"><span className="faint">binding</span><span className="val">{planHash.slice(0, 22)}…</span></div></div>
           {error && <Err msg={error} />}
           <div className="dock"><div className="inner" style={{ display: 'flex', gap: 10 }}>
-            <button className="btn btn-ghost" style={{ width: 'auto', padding: '17px 18px' }} onClick={() => setStage('plan')}>Back</button>
+            <button className="btn btn-ghost btn-sm" onClick={() => setStage('plan')}>Back</button>
             <button className="btn btn-world" disabled={busy} onClick={approveAndRun}>{busy ? <span className="spin" /> : 'Verify & approve'}</button>
           </div></div>
         </div>
@@ -197,18 +208,34 @@ export function AgentApp() {
 function Flow({ n, t, d, last }: { n: string; t: string; d: string; last?: boolean }) {
   return (
     <div className="step" style={last ? { borderBottom: 'none' } : undefined}>
-      <div className="num" style={{ background: 'linear-gradient(140deg,var(--gold),#8a6a30)', color: '#1a1206', fontWeight: 700 }}>{n}</div>
+      <div className="num" style={{ background: 'var(--ink)', color: '#fff', fontWeight: 700 }}>{n}</div>
       <div className="body"><div className="intent">{t}</div><div className="tool">{d}</div></div>
     </div>
   );
 }
-function Center({ title, sub }: { title: string; sub: string }) {
+// Live "thinking" indicator — a breathing core with pulse rings, a shimmering
+// title, an indeterminate progress bar, and cycling reasoning phrases. The agent
+// is visibly WORKING, never a static page.
+const THINK_PHRASES = [
+  'Reading your task…',
+  'Decomposing it into steps…',
+  'Choosing governed tools…',
+  'Drafting the plan…',
+  'Reviewing it for risk…',
+];
+function Thinking() {
+  const [i, setI] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setI(x => (x + 1) % THINK_PHRASES.length), 1500);
+    return () => clearInterval(t);
+  }, []);
   return (
-    <div className="shell center fade-in" style={{ display: 'grid', placeContent: 'center', minHeight: '80dvh' }}>
-      <div className="glass pad">
-        <div style={{ margin: '0 auto 16px', width: 26, height: 26 }}><div className="spin" style={{ width: 26, height: 26, borderTopColor: 'var(--gold)', borderColor: 'rgba(217,180,106,0.25)' }} /></div>
-        <div className="wordmark" style={{ fontSize: 20 }}>{title}</div>
-        <div className="dim" style={{ marginTop: 8, fontSize: 14 }}>{sub}</div>
+    <div className="shell thinking fade-in">
+      <div className="think-wrap">
+        <div className="think-orb"><div className="think-core" /></div>
+        <div className="think-title">Planning your mission</div>
+        <div className="think-sub" key={i}>{THINK_PHRASES[i]}</div>
+        <div className="think-bar" />
       </div>
     </div>
   );

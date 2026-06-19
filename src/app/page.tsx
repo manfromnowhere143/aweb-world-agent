@@ -1,5 +1,11 @@
 import { AgentApp } from '@/components/AgentApp';
+import { BootScreen } from '@/components/BootScreen';
 
 export default function Home() {
-  return <AgentApp />;
+  return (
+    <>
+      <BootScreen />
+      <AgentApp />
+    </>
+  );
 }

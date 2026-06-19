@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { MissionPlan, ReceiptChain } from '@/lib/trust/types';
 import type { WorldProofPayload } from '@/lib/world/verify';
+import type { MissionVerdict } from '@/lib/agent/verifier';
 import { requestPayment } from '@/lib/world/client';
 import { ReceiptVerifier } from './ReceiptVerifier';
 
@@ -21,7 +22,7 @@ type NodeState = 'pending' | 'active' | 'done' | 'blocked';
 interface TLNode { id: string; name: string; detail?: string; state: NodeState; sources?: string[] }
 
 const TOOL_NAME: Record<string, string> = {
-  research: 'Research the live web', draft: 'Draft the content', send: 'Deliver — World-ID approved', pay: 'Pay — governed',
+  research: 'Research the live web', fetch: 'Read a web page', draft: 'Draft the content', send: 'Deliver — World-ID approved', pay: 'Pay — governed', compute: 'Run code (sandbox)',
 };
 
 function initialNodes(plan: MissionPlan, needsApproval: boolean): TLNode[] {
@@ -31,6 +32,7 @@ function initialNodes(plan: MissionPlan, needsApproval: boolean): TLNode[] {
   ];
   if (needsApproval) nodes.push({ id: 'approval', name: 'Verified-human approval', detail: 'World ID proof bound to this exact plan', state: 'pending' });
   for (const s of plan.steps) nodes.push({ id: s.id, name: TOOL_NAME[s.tool] ?? s.tool, detail: s.intent, state: 'pending' });
+  nodes.push({ id: 'verify', name: 'Self-verified', detail: 'The agent grades whether it met your goal', state: 'pending' });
   nodes.push({ id: 'seal', name: 'Sealed & receipted', detail: 'Hash-chained + Ed25519-signed evidence', state: 'pending' });
   return nodes;
 }
@@ -40,6 +42,7 @@ export function MissionConsole({ missionId, plan, needsApproval, proof, walletAd
 }) {
   const [nodes, setNodes] = useState<TLNode[]>(() => initialNodes(plan, needsApproval));
   const [receipt, setReceipt] = useState<ReceiptChain | null>(null);
+  const [verdict, setVerdict] = useState<MissionVerdict | null>(null);
   const [error, setError] = useState('');
   const [settling, setSettling] = useState(false);
   const [settleError, setSettleError] = useState('');
@@ -92,8 +95,20 @@ export function MissionConsole({ missionId, plan, needsApproval, proof, walletAd
               else if (k === 'execute_step') set(d.stepId, { state: 'done', sources: Array.isArray(d.output?.sources) ? d.output.sources : undefined });
               else if (k === 'blocked') set(d.stepId, { state: 'blocked' });
             } else if (ev.type === 'step_start') set(ev.stepId, { state: 'active' });
-            else if (ev.type === 'sealing') set('seal', { state: 'active' });
-            else if (ev.type === 'done') { set('seal', { state: 'done' }); setReceipt(ev.receipt); }
+            else if (ev.type === 'verifying') set('verify', { state: 'active' });
+            else if (ev.type === 'verified') { set('verify', { state: 'done' }); setVerdict(ev.verdict); }
+            else if (ev.type === 'sealing') { set('verify', { state: 'done' }); set('seal', { state: 'active' }); }
+            else if (ev.type === 'anchoring') {
+              set('seal', { state: 'done' });
+              setNodes(ns => ns.some(n => n.id === 'anchor') ? ns : [...ns, { id: 'anchor', name: 'Anchored on World Chain', detail: 'Receipt root committed on-chain — permanent public proof', state: 'active' }]);
+            }
+            else if (ev.type === 'anchored') set('anchor', { state: 'done' });
+            else if (ev.type === 'done') {
+              set('verify', { state: 'done' }); set('seal', { state: 'done' }); set('anchor', { state: 'done' });
+              setReceipt(ev.receipt);
+              const ve = (ev.receipt?.entries ?? []).find((e: { kind: string }) => e.kind === 'verify');
+              if (ve) setVerdict(ve.data as MissionVerdict);
+            }
             else if (ev.type === 'error') setError(ev.error);
             else if (ev.type === 'need_approval') setError('Approval required — World ID proof missing.');
           }
@@ -148,8 +163,20 @@ export function MissionConsole({ missionId, plan, needsApproval, proof, walletAd
         return (
         <div className="fade-in">
           <div className="gap" />
+          {verdict && (
+            <div className={`glass tight pad verdict ${verdict.goalMet ? 'met' : 'unmet'}`} style={{ marginBottom: 14 }}>
+              <div className="row">
+                <span className="tl-name" style={{ fontSize: 15 }}>Self-verification</span>
+                <span className={`badge ${verdict.goalMet ? 'ok' : 'sens'}`}><span className="dot" />{verdict.goalMet ? 'goal met' : 'gaps found'}</span>
+              </div>
+              <div className="cbar"><div className={`cfill ${verdict.goalMet ? 'met' : 'unmet'}`} style={{ width: `${Math.round(verdict.confidence * 100)}%` }} /></div>
+              <div className="cnum">confidence {Math.round(verdict.confidence * 100)}%{verdict.model ? '' : ' · heuristic'}</div>
+              {verdict.rationale && <div className="tl-detail" style={{ marginTop: 8 }}>{verdict.rationale}</div>}
+              {verdict.gaps?.length > 0 && <div className="gaps">{verdict.gaps.map((g, i) => <div className="gap-item" key={i}>{g}</div>)}</div>}
+            </div>
+          )}
           {pend.map(pay => (
-            <div key={pay.stepId} className="glass pad" style={{ borderColor: 'rgba(240,196,106,0.4)', marginBottom: 14 }}>
+            <div key={pay.stepId} className="glass pad" style={{ borderColor: 'rgba(37,99,235,0.35)', marginBottom: 14 }}>
               <div className="row"><span className="tl-name" style={{ fontSize: 16 }}>Payment authorized</span><span className="badge value"><span className="dot" />needs settlement</span></div>
               <div className="tl-detail" style={{ marginTop: 8 }}>Your World ID approval authorized <b>{pay.amountUsd} {pay.currency}</b> → <span className="mono">{pay.to.slice(0, 14)}…</span>. Settle it from your World Wallet.</div>
               {settleError && <div style={{ color: 'var(--red)', fontSize: 13, marginTop: 10 }}>{settleError}</div>}
@@ -161,9 +188,23 @@ export function MissionConsole({ missionId, plan, needsApproval, proof, walletAd
             <div className="glass tight pad" style={{ borderColor: 'rgba(87,224,166,0.4)', marginBottom: 14 }}>
               <div className="row"><span className="tl-name" style={{ fontSize: 15 }}>Payment settled on-chain</span><span className="badge ok"><span className="dot" />settled</span></div>
               {receipt.entries.filter(e => e.kind === 'settle').map((e, i) => {
-                const d = e.data as { txId?: string; explorer?: string | null };
-                return <div key={i} className="hash" style={{ marginTop: 8 }}>{d.explorer ? <a href={d.explorer} target="_blank" rel="noreferrer">{String(d.txId).slice(0, 30)}… ↗</a> : `${String(d.txId).slice(0, 30)}… (dev)`}</div>;
+                const d = e.data as { txId?: string; explorer?: string | null; asset?: string; amountUsd?: number; amountWei?: string };
+                const ethAmt = d.amountWei ? Number(d.amountWei) / 1e18 : 0;
+                const ethStr = ethAmt > 0 ? String(Number(ethAmt.toPrecision(3))) : '';
+                return (
+                  <div key={i} style={{ marginTop: 8 }}>
+                    {ethStr && <div className="tl-detail">{ethStr} {d.asset ?? 'ETH'}{d.amountUsd ? ` (≈ $${d.amountUsd})` : ''} — governed agent-treasury transfer on World Chain</div>}
+                    <div className="hash" style={{ marginTop: 4 }}>{d.explorer ? <a href={d.explorer} target="_blank" rel="noreferrer">{String(d.txId).slice(0, 30)}… ↗</a> : `${String(d.txId).slice(0, 30)}… (dev)`}</div>
+                  </div>
+                );
               })}
+            </div>
+          )}
+          {receipt.anchor && (
+            <div className="glass tight pad" style={{ borderColor: 'rgba(122,162,255,0.45)', marginBottom: 14 }}>
+              <div className="row"><span className="tl-name" style={{ fontSize: 15 }}>Anchored on World Chain</span><span className="badge ok"><span className="dot" />on-chain</span></div>
+              <div className="tl-detail" style={{ marginTop: 8 }}>The sealed receipt root is committed on World Chain — a permanent, public proof anyone can audit.</div>
+              <div className="hash" style={{ marginTop: 8 }}><a href={receipt.anchor.explorer} target="_blank" rel="noreferrer">{receipt.anchor.txHash.slice(0, 30)}… ↗</a></div>
             </div>
           )}
           <ReceiptVerifier chain={receipt} />

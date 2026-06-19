@@ -1,6 +1,12 @@
 import type { Metadata, Viewport } from 'next';
+import { Inter, Inter_Tight } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
+
+// World's own brand fallback fonts (World Pro → Inter / Inter Tight). Mobile-first,
+// crisp at small sizes — the World-native, Apple-grade type system.
+const inter = Inter({ subsets: ['latin'], variable: '--font-inter', display: 'swap' });
+const interTight = Inter_Tight({ subsets: ['latin'], weight: ['500', '600', '700'], variable: '--font-inter-tight', display: 'swap' });
 
 const SITE = 'https://agent.aweblabs.ai';
 const V = '20260617'; // icon/asset cache-bust (house standard ?v=YYYYMMDD)
@@ -64,12 +70,12 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: '#05070B',
+  themeColor: '#F4F6FA',
   width: 'device-width',
   initialScale: 1,
   maximumScale: 1,
   viewportFit: 'cover',
-  colorScheme: 'dark',
+  colorScheme: 'light',
 };
 
 const JSON_LD = {
@@ -98,7 +104,7 @@ const JSON_LD = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${inter.variable} ${interTight.variable}`}>
       <body>
         <div className="aurora" aria-hidden><span className="spark" /></div>
         <Providers>{children}</Providers>
